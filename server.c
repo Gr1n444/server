@@ -2,22 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/event.h>
+#include <sys/time.h>
 
-#define MAX_EVENTS 64
 #define PORT 12345
+#define MAX_CLIENTS 10
 
-// Структура для хранения данных о клиенте
 typedef struct {
     int client_socket;
     char command[256];
 } ClientData;
 
-// Функция для вычисления факториала
 unsigned long long factorial(int n) {
     if (n == 0 || n == 1) {
         return 1;
@@ -26,12 +23,10 @@ unsigned long long factorial(int n) {
     }
 }
 
-// Функция для вычисления экспоненты
 double exponent(double x) {
     return exp(x);
 }
 
-// Функция для обработки команды и отправки ответа
 void handle_command(ClientData* client_data) {
     char response[256];
     memset(response, 0, sizeof(response));
@@ -87,55 +82,51 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // Создание неблокирующего сокета
-    int flags = fcntl(server_socket, F_GETFL, 0);
-    fcntl(server_socket, F_SETFL, flags | O_NONBLOCK);
+    fd_set read_fds;
+    fd_set master_fds;
+    int max_fd = server_socket;
 
-    // Создание и настройка объекта kevent
-    int kq = kqueue();
-    struct kevent server_event;
-    EV_SET(&server_event, server_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
-
-    // Регистрация серверного сокета в очереди событий
-    if (kevent(kq, &server_event, 1, NULL, 0, NULL) == -1) {
-        perror("Error registering server socket");
-        close(server_socket);
-        exit(EXIT_FAILURE);
-    }
+    FD_ZERO(&master_fds);
+    FD_SET(server_socket, &master_fds);
 
     printf("Server listening on port %d...\n", PORT);
 
     while (1) {
-        struct kevent events[MAX_EVENTS];
-        int event_count = kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
+        read_fds = master_fds;
 
-        for (int i = 0; i < event_count; ++i) {
-            int socket_fd = events[i].ident;
+        if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) == -1) {
+            perror("Error in select");
+            exit(EXIT_FAILURE);
+        }
 
-            if (socket_fd == server_socket) {
-                // Принятие нового подключения
-                int client_socket = accept(server_socket, NULL, NULL);
-                if (client_socket != -1) {
-                    // Регистрация нового клиентского сокета в очереди событий
-                    struct kevent client_event;
-                    EV_SET(&client_event, client_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
-                    kevent(kq, &client_event, 1, NULL, 0, NULL);
-                }
-            } else {
-                // Чтение данных от клиента
-                char buffer[256];
-                ssize_t bytes_received = recv(socket_fd, buffer, sizeof(buffer), 0);
-
-                if (bytes_received > 0) {
-                    // Обработка команды в фоновом режиме
-                    ClientData* client_data = (ClientData*)malloc(sizeof(ClientData));
-                    client_data->client_socket = socket_fd;
-                    strncpy(client_data->command, buffer, sizeof(client_data->command));
-
-                    handle_command(client_data);
+        for (int i = 0; i <= max_fd; ++i) {
+            if (FD_ISSET(i, &read_fds)) {
+                if (i == server_socket) {
+                    // Новое подключение
+                    int client_socket = accept(server_socket, NULL, NULL);
+                    if (client_socket != -1) {
+                        FD_SET(client_socket, &master_fds);
+                        if (client_socket > max_fd) {
+                            max_fd = client_socket;
+                        }
+                    }
                 } else {
-                    // Закрытие сокета при ошибке или завершении клиента
-                    close(socket_fd);
+                    // Данные от клиента
+                    char buffer[256];
+                    ssize_t bytes_received = recv(i, buffer, sizeof(buffer), 0);
+
+                    if (bytes_received > 0) {
+                        // Обработка команды
+                        ClientData* client_data = (ClientData*)malloc(sizeof(ClientData));
+                        client_data->client_socket = i;
+                        strncpy(client_data->command, buffer, sizeof(client_data->command));
+
+                        handle_command(client_data);
+                    } else if (bytes_received == 0) {
+                        // Сокет был закрыт клиентом
+                        close(i);
+                        FD_CLR(i, &master_fds);
+                    }
                 }
             }
         }
