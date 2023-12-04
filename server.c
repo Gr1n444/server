@@ -126,6 +126,11 @@ int main() {
                         // Сокет был закрыт клиентом
                         close(i);
                         FD_CLR(i, &master_fds);
+                        if (i == max_fd) {
+                            while (!FD_ISSET(max_fd, &master_fds)) {
+                                max_fd--;
+                            }
+                        }
                     }
                 }
             }
