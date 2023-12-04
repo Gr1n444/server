@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/sha.h>
+#include <mhash.h>
 
 #define TOKEN_LENGTH 40
 
@@ -19,14 +19,6 @@ char* generate_token() {
     return token;
 }
 
-// Хэширование пароля с использованием SHA-256
-void sha256_hash(const char* input, char* output) {
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, input, strlen(input));
-    SHA256_Final((unsigned char*)output, &sha256);
-}
-
 // Функция аутентификации
 int authenticate(const char* login, const char* password) {
     FILE* database_file = fopen("database.txt", "r");
@@ -40,7 +32,7 @@ int authenticate(const char* login, const char* password) {
     char line[256];
     while (fgets(line, sizeof(line), database_file) != NULL) {
         char stored_login[256];
-        char stored_hash[SHA256_DIGEST_LENGTH * 2 + 1];
+        char stored_hash[16];  // Размер хэша MD4
 
         // Remove newline character
         line[strcspn(line, "\n")] = '\0';
@@ -48,10 +40,20 @@ int authenticate(const char* login, const char* password) {
         if (sscanf(line, "%s %s", stored_login, stored_hash) == 2 &&
             strcmp(login, stored_login) == 0) {
             // Найдено совпадение логина, теперь проверим хэш пароля
-            char input_hash[SHA256_DIGEST_LENGTH * 2 + 1];
-            sha256_hash(password, input_hash);
+            MHASH td;
+            td = mhash_init(MHASH_MD4);
 
-            if (strcmp(input_hash, stored_hash) == 0) {
+            mhash(td, password, strlen(password));
+
+            unsigned char input_hash[16];
+            mhash_deinit(td, input_hash);
+
+            char input_hash_str[32];  // Размер для хранения хэша в виде строки
+            for (int i = 0; i < 16; i++) {
+                sprintf(&input_hash_str[i * 2], "%02x", input_hash[i]);
+            }
+
+            if (strcmp(input_hash_str, stored_hash) == 0) {
                 // Пароль совпадает, генерируем токен
                 char* token = generate_token();
                 fprintf(tokens_file, "%s %s\n", login, token);
